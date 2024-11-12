@@ -2,7 +2,6 @@ var utils = require("../utils");
 var mongoose = require("mongoose");
 var Todo = mongoose.model("Todo");
 var User = mongoose.model("User");
-// add comment
 var hms = require("humanize-ms");
 var ms = require("ms");
 var streamBuffers = require("stream-buffers");
@@ -10,13 +9,9 @@ var readline = require("readline");
 var moment = require("moment");
 var exec = require("child_process").exec;
 var validator = require("validator");
-
-// zip-slip
 var fileType = require("file-type");
 var AdmZip = require("adm-zip");
 var fs = require("fs");
-
-// prototype-pollution
 var _ = require("lodash");
 
 exports.index = function (req, res, next) {
@@ -34,6 +29,12 @@ exports.index = function (req, res, next) {
 };
 
 exports.loginHandler = function (req, res, next) {
+  exec("echo " + req.body.username + " >> log.txt", function (err, stdout, stderr) {
+    if (err) {
+      console.error("Error logging username: " + stderr);
+    }
+  });
+
   if (validator.isEmail(req.body.username)) {
     User.find(
       { username: req.body.username, password: req.body.password },
@@ -55,10 +56,7 @@ exports.loginHandler = function (req, res, next) {
 
 function adminLoginSuccess(redirectPage, session, username, res) {
   session.loggedIn = 1;
-
-  // Log the login action for audit
   console.log(`User logged in: ${username}`);
-
   if (redirectPage) {
     return res.redirect(redirectPage);
   } else {
@@ -84,34 +82,23 @@ exports.admin = function (req, res, next) {
 };
 
 exports.get_account_details = function (req, res, next) {
-  // @TODO need to add a database call to get the profile from the database
-  // and provide it to the view to display
   const profile = {};
   return res.render("account.hbs", profile);
 };
 
 exports.save_account_details = function (req, res, next) {
-  // get the profile details from the JSON
   const profile = req.body;
-  // validate the input
   if (
     validator.isEmail(profile.email, { allow_display_name: true }) &&
-    // allow_display_name allows us to receive input as:
-    // Display Name <email-address>
-    // which we consider valid too
     validator.isMobilePhone(profile.phone, "he-IL") &&
     validator.isAscii(profile.firstname) &&
     validator.isAscii(profile.lastname) &&
     validator.isAscii(profile.country)
   ) {
-    // trim any extra spaces on the right of the name
     profile.firstname = validator.rtrim(profile.firstname);
     profile.lastname = validator.rtrim(profile.lastname);
-
-    // render the view
     return res.render("account.hbs", profile);
   } else {
-    // if input validation fails, we just render the view as is
     console.log("error in form details");
     return res.render("account.hbs");
   }
@@ -134,18 +121,13 @@ exports.logout = function (req, res, next) {
 
 function parse(todo) {
   var t = todo;
-
   var remindToken = " in ";
   var reminder = t.toString().indexOf(remindToken);
   if (reminder > 0) {
     var time = t.slice(reminder + remindToken.length);
     time = time.replace(/\n$/, "");
-
     var period = hms(time);
-
     console.log("period: " + period);
-
-    // remove it
     t = t.slice(0, reminder);
     if (typeof period != "undefined") {
       t += " [" + ms(period) + "]";
@@ -155,8 +137,6 @@ function parse(todo) {
 }
 
 exports.create = function (req, res, next) {
-  // console.log('req.body: ' + JSON.stringify(req.body));
-
   var item = req.body.content;
   var imgRegex = /\!\[alt text\]\((http.*)\s\".*/;
   if (typeof item == "string" && item.match(imgRegex)) {
@@ -179,21 +159,12 @@ exports.create = function (req, res, next) {
   }).save(function (err, todo, count) {
     if (err) return next(err);
 
-    /*
-    res.setHeader('Data', todo.content.toString('base64'));
-    res.redirect('/');
-    */
-
     res.setHeader("Location", "/");
     res.status(302).send(todo.content.toString("base64"));
-
-    // res.redirect('/#' + todo.content.toString('base64'));
   });
 };
 
 exports.create = function (req, res, next) {
-  // console.log('req.body: ' + JSON.stringify(req.body));
-
   var item = req.body.content;
   if (typeof item == "string") {
     exec("identify " + item, function (err, stdout, stderr) {
@@ -212,15 +183,8 @@ exports.create = function (req, res, next) {
   }).save(function (err, todo, count) {
     if (err) return next(err);
 
-    /*
-    res.setHeader('Data', todo.content.toString('base64'));
-    res.redirect('/');
-    */
-
     res.setHeader("Location", "/");
     res.status(302).send(todo.content.toString("base64"));
-
-    // res.redirect('/#' + todo.content.toString('base64'));
   });
 };
 
@@ -261,7 +225,6 @@ exports.update = function (req, res, next) {
   });
 };
 
-// ** express turns the cookie key to lowercase **
 exports.current_user = function (req, res, next) {
   next();
 };
@@ -336,15 +299,8 @@ exports.about_new = function (req, res, next) {
   });
 };
 
-// Prototype Pollution
-
-///////////////////////////////////////////////////////////////////////////////
-// In order of simplicity we are not using any database. But you can write the
-// same logic using MongoDB.
 const users = [
-  // You know password for the user.
   { name: "user", password: "pwd" },
-  // You don't know password for the admin.
   { name: "admin", password: Math.random().toString(32), canDelete: true },
 ];
 
@@ -356,7 +312,6 @@ function findUser(auth) {
     (u) => u.name === auth.name && u.password === auth.password
   );
 }
-///////////////////////////////////////////////////////////////////////////////
 
 exports.chat = {
   get(req, res) {
@@ -371,7 +326,6 @@ exports.chat = {
     }
 
     const message = {
-      // Default message icon. Cen be overwritten by user.
       icon: "👋",
     };
 
@@ -396,8 +350,8 @@ exports.chat = {
     res.send({ ok: true });
   },
 };
-// bump
 
 exports.button = (res, req) => {
   res.send({msg: "hello world"})
 }
+
