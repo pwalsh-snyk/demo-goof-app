@@ -1,0 +1,10 @@
+{
+  "servers": {
+    "Snyk": {
+      "type": "stdio",
+      "command": "/absolute/path/to/snyk",
+      "args": ["mcp", "-t", "stdio"],
+      "env": {}
+    }
+  }
+}
