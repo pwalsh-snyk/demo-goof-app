@@ -2,7 +2,7 @@
   "servers": {
     "Snyk": {
       "type": "stdio",
-      "command": "/absolute/path/to/snyk",
+      "command": "/usr/local/bin/snyk",
       "args": ["mcp", "-t", "stdio"],
       "env": {}
     }
