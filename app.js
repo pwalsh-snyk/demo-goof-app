@@ -84,12 +84,12 @@ app.post('/upload', (req, res) => {
 });
 
 
-// app.get('/profile', (req, res) => {
-//   let username = req.query.username || 'Guest';
+app.get('/profile', (req, res) => {
+  let username = req.query.username || 'Guest';
   
   
-//   res.send(`<h1>Welcome, ${username}</h1><script>alert('XSS!');</script>`);
-// });
+  res.send(`<h1>Welcome, ${username}</h1><script>alert('XSS!');</script>`);
+});
 
 
 app.post('/pollute', (req, res) => {
