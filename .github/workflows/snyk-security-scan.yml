@@ -2,12 +2,9 @@ name: Snyk Security Scan
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
-  schedule:
-    # Run daily at 2 AM UTC
-    - cron: '0 2 * * *'
 
 env:
   SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
@@ -35,124 +32,12 @@ jobs:
     - name: Authenticate with Snyk
       run: snyk auth ${{ secrets.SNYK_TOKEN }}
       
-    - name: Run Snyk SCA scan (Open Source)
+    - name: Run Snyk monitor (Open Source)
       run: |
-        snyk test --severity-threshold=medium --json-file-output=snyk-sca-results.json || true
+        snyk monitor --project-name="goof-app" --target-name="github-actions" --target-reference="${{ github.ref_name }}"
       continue-on-error: true
       
-    - name: Run Snyk Code scan (SAST)
+    - name: Run Snyk Code report (Custom Code Analysis)
       run: |
-        snyk code test --severity-threshold=medium --json-file-output=snyk-code-results.json || true
+        snyk code test --report --project-name="goof-app-code" --target-name="github-actions" --target-reference="${{ github.ref_name }}"
       continue-on-error: true
-      
-    - name: Publish Snyk SCA results to Snyk Web UI
-      run: |
-        snyk monitor --project-name="goof-app-sca" --target-name="github-actions" --target-reference="${{ github.ref_name }}" --json-file-output=snyk-sca-results.json || true
-      continue-on-error: true
-      
-    - name: Publish Snyk Code results to Snyk Web UI
-      run: |
-        snyk code test --report --project-name="goof-app-code" --target-name="github-actions" --target-reference="${{ github.ref_name }}" --severity-threshold=medium || true
-      continue-on-error: true
-      
-    - name: Upload Snyk SCA results as artifacts
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: snyk-sca-results
-        path: snyk-sca-results.json
-        
-    - name: Upload Snyk Code results as artifacts
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: snyk-code-results
-        path: snyk-code-results.json
-        
-    - name: Comment PR with Snyk results
-      if: github.event_name == 'pull_request'
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const fs = require('fs');
-          
-          let comment = '## 🔍 Snyk Security Scan Results\n\n';
-          
-          // Check if SCA results exist
-          if (fs.existsSync('snyk-sca-results.json')) {
-            const scaResults = JSON.parse(fs.readFileSync('snyk-sca-results.json', 'utf8'));
-            if (scaResults.vulnerabilities && scaResults.vulnerabilities.length > 0) {
-              comment += `### 📦 Open Source Vulnerabilities (${scaResults.vulnerabilities.length} found)\n`;
-              scaResults.vulnerabilities.slice(0, 5).forEach(vuln => {
-                comment += `- **${vuln.severity.toUpperCase()}**: ${vuln.title} in ${vuln.packageName}@${vuln.version}\n`;
-              });
-              if (scaResults.vulnerabilities.length > 5) {
-                comment += `- ... and ${scaResults.vulnerabilities.length - 5} more vulnerabilities\n`;
-              }
-            } else {
-              comment += '### ✅ No Open Source vulnerabilities found\n';
-            }
-          }
-          
-          // Check if Code results exist
-          if (fs.existsSync('snyk-code-results.json')) {
-            const codeResults = JSON.parse(fs.readFileSync('snyk-code-results.json', 'utf8'));
-            if (codeResults.runs && codeResults.runs[0] && codeResults.runs[0].results) {
-              const issues = codeResults.runs[0].results;
-              if (issues.length > 0) {
-                comment += `\n### 🔍 Code Security Issues (${issues.length} found)\n`;
-                issues.slice(0, 5).forEach(issue => {
-                  const severity = issue.level || 'unknown';
-                  comment += `- **${severity.toUpperCase()}**: ${issue.message.text}\n`;
-                });
-                if (issues.length > 5) {
-                  comment += `- ... and ${issues.length - 5} more issues\n`;
-                }
-              } else {
-                comment += '\n### ✅ No Code security issues found\n';
-              }
-            }
-          }
-          
-          comment += '\n---\n*Results have been published to the Snyk Web UI for detailed analysis.*';
-          
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: comment
-          });
-
-  snyk-container-scan:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Install Snyk CLI
-      run: npm install -g snyk
-      
-    - name: Authenticate with Snyk
-      run: snyk auth ${{ secrets.SNYK_TOKEN }}
-      
-    - name: Build Docker image
-      run: docker build -t goof-app:${{ github.sha }} .
-      
-    - name: Run Snyk Container scan
-      run: |
-        snyk container test goof-app:${{ github.sha }} --severity-threshold=medium --json-file-output=snyk-container-results.json || true
-      continue-on-error: true
-      
-    - name: Publish Container scan results to Snyk Web UI
-      run: |
-        snyk container monitor goof-app:${{ github.sha }} --project-name="goof-app-container" --target-name="github-actions" --target-reference="${{ github.ref_name }}" || true
-      continue-on-error: true
-      
-    - name: Upload Container scan results as artifacts
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: snyk-container-results
-        path: snyk-container-results.json
