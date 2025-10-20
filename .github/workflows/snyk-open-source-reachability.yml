@@ -23,10 +23,10 @@ jobs:
       - name: Generate SBOM (CycloneDX JSON)
         run: snyk sbom --org=bb34b202-b76c-4e32-bba2-23b970d74f04 --format=cyclonedx1.5+json --all-projects > sbom.json
 
-      - name: Test SBOM with reachability and parse output
+      - name: Test with reachability and parse output
         id: snyk-test
         run: |
-          echo "🔍 Testing SBOM with reachability analysis..."
+          echo "🔍 Testing for reachability analysis..."
           echo ""
           
           # Run Snyk SBOM test and capture output with proper exit code handling
@@ -36,7 +36,7 @@ jobs:
           set -e  # Re-enable exit on error
           
           # Display the raw Snyk output first
-          echo "📋 SNYK SBOM REACHABILITY ANALYSIS"
+          echo "📋 SNYK REACHABILITY ANALYSIS"
           echo "=================================="
           echo ""
           echo "$SNYK_OUTPUT"
@@ -88,7 +88,7 @@ jobs:
           fi
           
           # Create GitHub step summary
-          echo "## 🔍 Snyk SBOM Reachability Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔍 Snyk Reachability Analysis" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📊 Vulnerability Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Total vulnerabilities found:** $TOTAL_VULNS" >> $GITHUB_STEP_SUMMARY
@@ -128,10 +128,11 @@ jobs:
             exit "$EXIT_CODE"
           fi
 
-      - name: Upload SBOM as artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: snyk-sbom-reachability-results
-          path: sbom.json
+# Optional ability to upload these results as an artifact 
+      # - name: Upload SBOM as artifact
+      #   uses: actions/upload-artifact@v4
+      #   if: always()
+      #   with:
+      #     name: snyk-sbom-reachability-results
+      #     path: sbom.json
           retention-days: 30
