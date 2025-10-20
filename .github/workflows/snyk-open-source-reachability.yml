@@ -27,7 +27,7 @@ jobs:
       - name: Test SBOM with reachability and parse output
         id: snyk-test
         run: |
-          echo "🔍 Testing SBOM with reachability analysis..."
+          echo "🔍 Snyk Open Source analysis..."
           echo ""
           
           # Run Snyk SBOM test and capture output with proper exit code handling
@@ -89,7 +89,7 @@ jobs:
           fi
           
           # Create GitHub step summary
-          echo "## 🔍 Snyk SBOM Reachability Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔍 Snyk Reachability Analysis" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📊 Vulnerability Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Total vulnerabilities found:** $TOTAL_VULNS" >> $GITHUB_STEP_SUMMARY
@@ -128,11 +128,11 @@ jobs:
             echo "⚠️  Snyk completed with unexpected exit code: $EXIT_CODE"
             exit "$EXIT_CODE"
           fi
-
-      - name: Upload SBOM as artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: snyk-sbom-reachability-results
-          path: sbom.json
-          retention-days: 30
+# Optional - upload the SBOM results as an artifact
+      # - name: Upload SBOM as artifact
+      #   uses: actions/upload-artifact@v4
+      #   if: always()
+      #   with:
+      #     name: snyk-sbom-reachability-results
+      #     path: sbom.json
+      #     retention-days: 30
