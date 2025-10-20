@@ -30,6 +30,7 @@ jobs:
       - name: Test SBOM with reachability
         run: |
           snyk sbom test \
+            --experimental \
             --org=8ec4df32-1341-4064-b7fe-4d33bf919710 \
             --file=sbom.json \
             --reachability
