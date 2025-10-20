@@ -21,7 +21,7 @@ jobs:
         run: snyk auth "$SNYK_TOKEN"
 
       - name: Generate SBOM (CycloneDX JSON)
-        run: snyk sbom --org=8ec4df32-1341-4064-b7fe-4d33bf919710 --format=cyclonedx1.5+json --all-projects > sbom.json
+        run: snyk sbom --org=bb34b202-b76c-4e32-bba2-23b970d74f04 --format=cyclonedx1.5+json --all-projects > sbom.json
 
       - name: Test SBOM with reachability (experimental)
-        run: snyk sbom test --experimental --org=8ec4df32-1341-4064-b7fe-4d33bf919710 --file=sbom.json --reachability
+        run: snyk sbom test --experimental --org=bb34b202-b76c-4e32-bba2-23b970d74f04 --file=sbom.json --reachability
