@@ -29,8 +29,11 @@ jobs:
           echo "🔍 Testing SBOM with reachability analysis..."
           echo ""
           
-          # Run Snyk SBOM test and capture output
-          SNYK_OUTPUT=$(snyk sbom test --experimental --org=bb34b202-b76c-4e32-bba2-23b970d74f04 --file=sbom.json --reachability 2>&1 || EXIT_CODE=$?)
+          # Run Snyk SBOM test and capture output with proper exit code handling
+          set +e  # Don't exit on error, we'll handle it manually
+          SNYK_OUTPUT=$(snyk sbom test --experimental --org=bb34b202-b76c-4e32-bba2-23b970d74f04 --file=sbom.json --reachability 2>&1)
+          EXIT_CODE=$?
+          set -e  # Re-enable exit on error
           
           # Display the raw Snyk output first
           echo "📋 SNYK SBOM REACHABILITY ANALYSIS"
@@ -43,14 +46,14 @@ jobs:
           echo "📊 PARSED VULNERABILITY SUMMARY"
           echo "───────────────────────────────"
           
-          # Count total vulnerabilities (look for "vulnerabilities found" pattern)
-          TOTAL_VULNS=$(echo "$SNYK_OUTPUT" | grep -o '[0-9]\+ vulnerabilities found' | grep -o '[0-9]\+' | head -1 || echo "0")
+          # Count total vulnerabilities from the summary section
+          TOTAL_VULNS=$(echo "$SNYK_OUTPUT" | grep -o 'Total security issues: [0-9]\+' | grep -o '[0-9]\+' || echo "0")
           
-          # Count reachable vulnerabilities (look for "reachable" pattern)
-          REACHABLE_VULNS=$(echo "$SNYK_OUTPUT" | grep -c "reachable" || echo "0")
+          # Count reachable vulnerabilities by looking for "Reachability: Reachable" pattern
+          REACHABLE_VULNS=$(echo "$SNYK_OUTPUT" | grep -c "Reachability: Reachable" || echo "0")
           
-          # Count unreachable vulnerabilities
-          UNREACHABLE_VULNS=$(echo "$SNYK_OUTPUT" | grep -c "unreachable" || echo "0")
+          # Count unreachable vulnerabilities by looking for "No reachable path found" pattern
+          UNREACHABLE_VULNS=$(echo "$SNYK_OUTPUT" | grep -c "No reachable path found" || echo "0")
           
           echo "🔍 Total vulnerabilities found: $TOTAL_VULNS"
           echo "🎯 Reachable vulnerabilities: $REACHABLE_VULNS"
@@ -61,15 +64,15 @@ jobs:
             echo "🚨 REACHABLE VULNERABILITIES DETAILS"
             echo "────────────────────────────────────"
             
-            # Extract reachable vulnerability details
-            echo "$SNYK_OUTPUT" | grep -A 5 -B 1 "reachable" | grep -E "(High|Medium|Low|Critical|vulnerability)" | head -20
+            # Extract reachable vulnerability details with better context
+            echo "$SNYK_OUTPUT" | grep -B 10 -A 2 "Reachability: Reachable" | grep -E "(CRITICAL|HIGH|MEDIUM|LOW|Finding ID)" | head -20
             echo ""
             
-            # Count by severity for reachable vulnerabilities
-            CRITICAL=$(echo "$SNYK_OUTPUT" | grep -c "Critical.*reachable" || echo "0")
-            HIGH=$(echo "$SNYK_OUTPUT" | grep -c "High.*reachable" || echo "0")
-            MEDIUM=$(echo "$SNYK_OUTPUT" | grep -c "Medium.*reachable" || echo "0")
-            LOW=$(echo "$SNYK_OUTPUT" | grep -c "Low.*reachable" || echo "0")
+            # Count by severity for reachable vulnerabilities - look for severity in the lines before "Reachability: Reachable"
+            CRITICAL=$(echo "$SNYK_OUTPUT" | grep -B 10 "Reachability: Reachable" | grep -c "\[CRITICAL\]" || echo "0")
+            HIGH=$(echo "$SNYK_OUTPUT" | grep -B 10 "Reachability: Reachable" | grep -c "\[HIGH\]" || echo "0")
+            MEDIUM=$(echo "$SNYK_OUTPUT" | grep -B 10 "Reachability: Reachable" | grep -c "\[MEDIUM\]" || echo "0")
+            LOW=$(echo "$SNYK_OUTPUT" | grep -B 10 "Reachability: Reachable" | grep -c "\[LOW\]" || echo "0")
             
             echo "📈 REACHABLE VULNERABILITIES BY SEVERITY"
             echo "────────────────────────────────────────"
@@ -110,11 +113,19 @@ jobs:
             echo "All detected vulnerabilities are not reachable in your codebase." >> $GITHUB_STEP_SUMMARY
           fi
           
-          # Handle exit codes properly
-          if [ "$EXIT_CODE" != "0" ] && [ "$EXIT_CODE" != "1" ]; then 
+          # Handle exit codes properly - Snyk exit codes: 0=success, 1=vulnerabilities found, 2=command failed
+          if [ "$EXIT_CODE" = "2" ]; then
+            echo "❌ Snyk command failed to execute (exit code 2). This indicates a command execution error."
+            echo "💡 Try re-running the workflow or check the Snyk service status."
+            echo "🔧 Use -d flag for debug logs if this persists."
+            exit 2
+          elif [ "$EXIT_CODE" = "1" ]; then
+            echo "✅ Snyk completed successfully - vulnerabilities found (exit code 1)"
+          elif [ "$EXIT_CODE" = "0" ]; then
+            echo "✅ Snyk completed successfully - no vulnerabilities found (exit code 0)"
+          else
+            echo "⚠️  Snyk completed with unexpected exit code: $EXIT_CODE"
             exit "$EXIT_CODE"
-          else 
-            echo "✅ Snyk completed successfully (exit code: $EXIT_CODE)"
           fi
 
       - name: Upload SBOM as artifact
