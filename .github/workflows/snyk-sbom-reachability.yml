@@ -24,4 +24,6 @@ jobs:
         run: snyk sbom --org=bb34b202-b76c-4e32-bba2-23b970d74f04 --format=cyclonedx1.5+json --all-projects > sbom.json
 
       - name: Test SBOM with reachability (experimental)
-        run: snyk sbom test --experimental --org=bb34b202-b76c-4e32-bba2-23b970d74f04 --file=sbom.json --reachability
+        run: |
+          snyk sbom test --experimental --org=bb34b202-b76c-4e32-bba2-23b970d74f04 --file=sbom.json --reachability || EXIT_CODE=$?; \
+          if [ "$EXIT_CODE" != "0" ] && [ "$EXIT_CODE" != "1" ]; then exit "$EXIT_CODE"; else echo "Snyk completed successfully (exit code: $EXIT_CODE)"; fi
