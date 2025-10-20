@@ -1,0 +1,35 @@
+name: Snyk SBOM Reachability Test
+
+on:
+  push:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+jobs:
+  snyk-oss:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Authenticate Snyk
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: snyk auth "$SNYK_TOKEN"
+
+      - name: Generate SBOM
+        run: |
+          snyk sbom \
+            --org=8ec4df32-1341-4064-b7fe-4d33bf919710 \
+            --format=cyclonedx1.5+json \
+            --output-file=sbom.json
+
+      - name: Test SBOM with reachability
+        run: |
+          snyk sbom test \
+            --org=8ec4df32-1341-4064-b7fe-4d33bf919710 \
+            --file=sbom.json \
+            --reachability
