@@ -24,6 +24,96 @@ jobs:
         run: snyk sbom --org=bb34b202-b76c-4e32-bba2-23b970d74f04 --format=cyclonedx1.5+json --all-projects > sbom.json
 
       - name: Test SBOM with reachability (experimental)
+        id: snyk-test
         run: |
-          snyk sbom test --experimental --org=bb34b202-b76c-4e32-bba2-23b970d74f04 --file=sbom.json --reachability || EXIT_CODE=$?; \
+          echo "🔍 Testing SBOM with reachability analysis..."
+          snyk sbom test --experimental --org=bb34b202-b76c-4e32-bba2-23b970d74f04 --file=sbom.json --reachability --json > snyk-results.json 2>/dev/null || EXIT_CODE=$?; \
           if [ "$EXIT_CODE" != "0" ] && [ "$EXIT_CODE" != "1" ]; then exit "$EXIT_CODE"; else echo "Snyk completed successfully (exit code: $EXIT_CODE)"; fi
+
+      - name: Parse and display reachable vulnerabilities
+        if: always()
+        run: |
+          echo ""
+          echo "📋 SNYK SBOM REACHABILITY ANALYSIS"
+          echo "=================================="
+          echo ""
+          
+          # Check if results file exists and has content
+          if [ -f "snyk-results.json" ] && [ -s "snyk-results.json" ]; then
+            echo "✅ SBOM analysis completed successfully"
+            echo ""
+            
+            # Parse reachable vulnerabilities
+            REACHABLE_VULNS=$(cat snyk-results.json | jq -r '[.vulnerabilities[]? | select(.reachability == "reachable")] | length' 2>/dev/null || echo "0")
+            TOTAL_VULNS=$(cat snyk-results.json | jq -r '.vulnerabilities | length' 2>/dev/null || echo "0")
+            UNREACHABLE_VULNS=$((TOTAL_VULNS - REACHABLE_VULNS))
+            
+            echo "📊 VULNERABILITY SUMMARY"
+            echo "────────────────────────"
+            echo "🔍 Total vulnerabilities found: $TOTAL_VULNS"
+            echo "🎯 Reachable vulnerabilities: $REACHABLE_VULNS"
+            echo "🔒 Unreachable vulnerabilities: $UNREACHABLE_VULNS"
+            echo ""
+            
+            if [ "$REACHABLE_VULNS" -gt 0 ]; then
+              echo "🚨 REACHABLE VULNERABILITIES"
+              echo "────────────────────────────"
+              
+              # Count by severity
+              CRITICAL=$(cat snyk-results.json | jq -r '[.vulnerabilities[]? | select(.reachability == "reachable" and .severity == "critical")] | length' 2>/dev/null || echo "0")
+              HIGH=$(cat snyk-results.json | jq -r '[.vulnerabilities[]? | select(.reachability == "reachable" and .severity == "high")] | length' 2>/dev/null || echo "0")
+              MEDIUM=$(cat snyk-results.json | jq -r '[.vulnerabilities[]? | select(.reachability == "reachable" and .severity == "medium")] | length' 2>/dev/null || echo "0")
+              LOW=$(cat snyk-results.json | jq -r '[.vulnerabilities[]? | select(.reachability == "reachable" and .severity == "low")] | length' 2>/dev/null || echo "0")
+              
+              echo "🔴 Critical: $CRITICAL"
+              echo "🟠 High: $HIGH"
+              echo "🟡 Medium: $MEDIUM"
+              echo "🟢 Low: $LOW"
+              echo ""
+              
+              # Show detailed reachable vulnerabilities
+              echo "📋 DETAILED REACHABLE VULNERABILITIES"
+              echo "─────────────────────────────────────"
+              cat snyk-results.json | jq -r '.vulnerabilities[]? | select(.reachability == "reachable") | "• \(.id): \(.title) (\(.severity | ascii_upcase))"' 2>/dev/null || echo "No detailed information available"
+              echo ""
+              
+              # Show affected packages
+              echo "📦 AFFECTED PACKAGES"
+              echo "───────────────────"
+              cat snyk-results.json | jq -r '[.vulnerabilities[]? | select(.reachability == "reachable") | .packageName] | unique[]' 2>/dev/null | sed 's/^/- /' || echo "No package information available"
+              echo ""
+            else
+              echo "✅ No reachable vulnerabilities found!"
+              echo "All detected vulnerabilities are not reachable in your codebase."
+              echo ""
+            fi
+            
+            # Create GitHub step summary
+            echo "## 🔍 Snyk SBOM Reachability Analysis" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📊 Vulnerability Summary" >> $GITHUB_STEP_SUMMARY
+            echo "- **Total vulnerabilities found:** $TOTAL_VULNS" >> $GITHUB_STEP_SUMMARY
+            echo "- **Reachable vulnerabilities:** $REACHABLE_VULNS" >> $GITHUB_STEP_SUMMARY
+            echo "- **Unreachable vulnerabilities:** $UNREACHABLE_VULNS" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "$REACHABLE_VULNS" -gt 0 ]; then
+              echo "### 🚨 Reachable Vulnerabilities by Severity" >> $GITHUB_STEP_SUMMARY
+              echo "- 🔴 **Critical:** $CRITICAL" >> $GITHUB_STEP_SUMMARY
+              echo "- 🟠 **High:** $HIGH" >> $GITHUB_STEP_SUMMARY
+              echo "- 🟡 **Medium:** $MEDIUM" >> $GITHUB_STEP_SUMMARY
+              echo "- 🟢 **Low:** $LOW" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              
+              echo "### 📦 Affected Packages" >> $GITHUB_STEP_SUMMARY
+              cat snyk-results.json | jq -r '[.vulnerabilities[]? | select(.reachability == "reachable") | .packageName] | unique[]' 2>/dev/null | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY || echo "- No package information available" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "### ✅ No Reachable Vulnerabilities" >> $GITHUB_STEP_SUMMARY
+              echo "All detected vulnerabilities are not reachable in your codebase." >> $GITHUB_STEP_SUMMARY
+            fi
+            
+          else
+            echo "❌ No results file generated or file is empty"
+            echo "## ❌ Snyk SBOM Analysis Failed" >> $GITHUB_STEP_SUMMARY
+            echo "No results file was generated from the Snyk SBOM test." >> $GITHUB_STEP_SUMMARY
+          fi
