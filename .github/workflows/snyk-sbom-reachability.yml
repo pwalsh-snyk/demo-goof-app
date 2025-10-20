@@ -23,7 +23,7 @@ jobs:
       - name: Generate SBOM
         run: |
           snyk sbom \
-            --org=8ec4df32-1341-4064-b7fe-4d33bf919710 \
+            --org=bb34b202-b76c-4e32-bba2-23b970d74f04 \
             --format=cyclonedx1.5+json \
             --output-file=sbom.json
 
@@ -31,6 +31,6 @@ jobs:
         run: |
           snyk sbom test \
             --experimental \
-            --org=8ec4df32-1341-4064-b7fe-4d33bf919710 \
+            --org=bb34b202-b76c-4e32-bba2-23b970d74f04 \
             --file=sbom.json \
             --reachability
