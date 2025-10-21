@@ -18,14 +18,19 @@ jobs:
       - name: Authenticate Snyk
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_API: https://api.snyk.io
         run: snyk auth "$SNYK_TOKEN"
 
       - name: Generate SBOM (CycloneDX JSON)
+        env:
+          SNYK_API: https://api.snyk.io
         run: |
           snyk sbom --org=bb34b202-b76c-4e32-bba2-23b970d74f04 --format=cyclonedx1.5+json --all-projects > sbom.json
 
       - name: Test SBOM with reachability and parse output
         id: snyk-test
+        env:
+          SNYK_API: https://api.snyk.io
         run: |
           echo "🔍 Snyk Open Source analysis..."
           echo ""
@@ -136,3 +141,4 @@ jobs:
       #     name: snyk-sbom-reachability-results
       #     path: sbom.json
       #     retention-days: 30
+
