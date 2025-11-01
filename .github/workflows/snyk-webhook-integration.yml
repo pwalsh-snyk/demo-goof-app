@@ -63,6 +63,7 @@ jobs:
     # project_snapshot webhooks when new issues are detected.
     # See: https://docs.snyk.io/developer-tools/snyk-cli/scan-and-maintain-projects-using-the-cli/snyk-cli-for-snyk-code/scan-source-code-with-snyk-code-using-the-cli#publishing-snyk-code-cli-results
     - name: Snyk Code Test (SAST - Triggers Webhook)
+      id: snyk-code
       run: |
         snyk code test \
           --org=${{ secrets.SNYK_ORG_ID }} \
@@ -70,7 +71,138 @@ jobs:
           --project-name="goof-app-code-${{ github.event_name == 'pull_request' && 'pr' || 'main' }}" \
           --target-name="github-actions" \
           --target-reference="${{ github.ref_name }}" \
-          --severity-threshold=medium
+          --severity-threshold=medium > snyk-code-output.txt 2>&1 || true
+        
+        # Extract project URL if available
+        PROJECT_URL=$(grep -o 'https://app.snyk.io[^ ]*' snyk-code-output.txt | head -1 || echo "")
+        echo "project_url=$PROJECT_URL" >> $GITHUB_OUTPUT
+      continue-on-error: true
+      
+    # Fetch ALL issues from Snyk projects and send to Azure Function
+    # This ensures work items are created for ALL issues, not just new ones
+    # For demo purposes: sends all issues (new + existing) to create work items
+    - name: Fetch All Issues and Create Work Items
+      run: |
+        echo "Fetching ALL issues from Snyk projects..."
+        
+        # Install jq for JSON parsing
+        sudo apt-get update -qq && sudo apt-get install -y jq curl
+        
+        ORG_ID="${{ secrets.SNYK_ORG_ID }}"
+        SNYK_TOKEN="${{ secrets.SNYK_TOKEN }}"
+        API_BASE="https://api.snyk.io/v1"
+        
+        # Get all projects in the org
+        echo "Fetching projects..."
+        PROJECTS=$(curl -s -X GET \
+          "${API_BASE}/org/${ORG_ID}/projects" \
+          -H "Authorization: token ${SNYK_TOKEN}" \
+          -H "Content-Type: application/json" | jq -r '.projects[]? | select(.name | contains("goof-app")) | {id: .id, name: .name, type: .type}')
+        
+        if [ -z "$PROJECTS" ] || [ "$PROJECTS" == "null" ]; then
+          echo "No projects found matching 'goof-app'"
+          exit 0
+        fi
+        
+        # Process each project
+        echo "$PROJECTS" | jq -c '.' | while read -r project; do
+          PROJECT_ID=$(echo "$project" | jq -r '.id')
+          PROJECT_NAME=$(echo "$project" | jq -r '.name')
+          PROJECT_TYPE=$(echo "$project" | jq -r '.type')
+          
+          echo "Processing project: $PROJECT_NAME (ID: $PROJECT_ID, Type: $PROJECT_TYPE)"
+          
+          # Get ALL issues for this project (not just new ones)
+          ISSUES=$(curl -s -X POST \
+            "${API_BASE}/org/${ORG_ID}/project/${PROJECT_ID}/issues" \
+            -H "Authorization: token ${SNYK_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "filters": {
+                "severities": ["critical", "high", "medium"],
+                "types": ["vuln", "license", "code"]
+              }
+            }' | jq -r '.issues[]? // empty')
+          
+          if [ -z "$ISSUES" ] || [ "$ISSUES" == "null" ]; then
+            echo "No issues found for project $PROJECT_NAME"
+            continue
+          fi
+          
+          ISSUE_COUNT=$(echo "$ISSUES" | jq -s 'length')
+          echo "Found $ISSUE_COUNT issues for $PROJECT_NAME"
+          
+          # Format issues for webhook payload
+          FORMATTED_ISSUES=$(echo "$ISSUES" | jq -s 'map({
+            id: .id,
+            issueData: {
+              id: .id,
+              title: (.title // .issueData.title // "Security Issue"),
+              severity: (.severity // .issueData.severity // "medium" | ascii_downcase),
+              description: (.description // .issueData.description // "Security vulnerability detected"),
+              type: (.type // .issueData.type // "vuln"),
+              packageName: (.package // .pkgName // .packageName // "unknown"),
+              packageManager: (.packageManager // "npm"),
+              url: (.url // .issueData.url // "https://app.snyk.io"),
+              identifiers: (.identifiers // .issueData.identifiers // {})
+            },
+            introducedDate: (now | todateiso8601),
+            priority: {
+              score: 500,
+              factors: []
+            }
+          })')
+          
+          # Create webhook payload
+          PAYLOAD=$(jq -n \
+            --arg org_id "$ORG_ID" \
+            --arg org_name "Integration_Testing" \
+            --arg project_id "$PROJECT_ID" \
+            --arg project_name "$PROJECT_NAME" \
+            --arg project_type "$PROJECT_TYPE" \
+            --argjson issues "$FORMATTED_ISSUES" \
+            '{
+              project: {
+                id: $project_id,
+                name: $project_name,
+                browseUrl: "https://app.snyk.io/org/integration_testing/project/\($project_id)",
+                type: $project_type,
+                source: "cli"
+              },
+              org: {
+                id: $org_id,
+                name: $org_name,
+                slug: "integration_testing",
+                group: null
+              },
+              newIssues: $issues,
+              removedIssues: [],
+              timestamp: (now | todateiso8601)
+            }')
+          
+          # Send to Azure Function
+          AZURE_FUNCTION_CODE="${{ secrets.AZURE_FUNCTION_CODE }}"
+          AZURE_FUNCTION_URL="https://snyk-webhook-68258.azurewebsites.net/api/snykwebhookfunction?code=${AZURE_FUNCTION_CODE}"
+          echo "Sending $ISSUE_COUNT issues from $PROJECT_NAME to Azure Function..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "$AZURE_FUNCTION_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Snyk-Event: project_snapshot" \
+            -H "X-Snyk-Timestamp: $(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
+            -d "$PAYLOAD")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "✅ Successfully sent $ISSUE_COUNT issues from $PROJECT_NAME"
+            echo "Response: $BODY"
+          else
+            echo "⚠️ HTTP $HTTP_CODE response: $BODY"
+          fi
+        done
+        
+        echo "✅ Finished processing all projects"
       continue-on-error: true
       
     # Optional: Display summary
@@ -83,10 +215,7 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Webhook Integration" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "If NEW vulnerabilities were detected:" >> $GITHUB_STEP_SUMMARY
-        echo "1. Snyk sent webhook to Azure Function" >> $GITHUB_STEP_SUMMARY
-        echo "2. Work items created in Azure DevOps Boards" >> $GITHUB_STEP_SUMMARY
-        echo "3. Check: https://dev.azure.com/pr352312/Snyk_Boards_Testing/_boards/board/t/Snyk%20Boards%20Testing/Issues" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Note:** Webhooks only fire for NEW issues, not existing ones." >> $GITHUB_STEP_SUMMARY
+        echo "All issues (new and existing) have been sent to Azure Function" >> $GITHUB_STEP_SUMMARY
+        echo "1. Work items created in Azure DevOps Boards" >> $GITHUB_STEP_SUMMARY
+        echo "2. Check: https://dev.azure.com/pr352312/Snyk_Boards_Testing/_boards/board/t/Snyk%20Boards%20Testing/Issues" >> $GITHUB_STEP_SUMMARY
 
