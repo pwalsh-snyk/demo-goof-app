@@ -82,7 +82,7 @@ jobs:
         echo "Fetching all projects..."
         ALL_PROJECTS=$(curl -s -X GET \
           "${API_BASE}/org/${ORG_ID}/projects" \
-          -H "Authorization: token ${SNYK_TOKEN}" \
+          -H "Authorization: bearer ${SNYK_TOKEN}" \
           -H "Content-Type: application/json")
 
         echo "Raw ALL_PROJECTS response:"
@@ -126,7 +126,7 @@ jobs:
 
           ISSUES=$(curl -s -X POST \
             "${API_BASE}/org/${ORG_ID}/project/${PROJECT_ID}/issues" \
-            -H "Authorization: token ${SNYK_TOKEN}" \
+            -H "Authorization: bearer ${SNYK_TOKEN}" \
             -H "Content-Type: application/json" \
             -d '{
               "filters": {
