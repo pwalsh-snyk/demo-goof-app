@@ -49,13 +49,23 @@ jobs:
     # - Dependencies are updated with new vulnerabilities
     # - First time scanning this project
     - name: Snyk Monitor (Open Source - Triggers Webhook)
+      id: snyk-monitor
       run: |
-        snyk monitor \
+        OUTPUT=$(snyk monitor \
           --org=${{ secrets.SNYK_ORG_ID }} \
           --project-name="goof-app-${{ github.event_name == 'pull_request' && 'pr' || 'main' }}" \
           --target-name="github-actions" \
           --target-reference="${{ github.ref_name }}" \
-          --severity-threshold=medium
+          --severity-threshold=medium 2>&1) || true
+        echo "$OUTPUT"
+        
+        # Extract project URL/ID if available
+        PROJECT_URL=$(echo "$OUTPUT" | grep -o 'https://app.snyk.io[^ ]*project/[^/ ]*' | head -1 || echo "")
+        if [ -n "$PROJECT_URL" ]; then
+          PROJECT_ID=$(echo "$PROJECT_URL" | grep -o 'project/[^/]*' | cut -d'/' -f2 || echo "")
+          echo "project_id=$PROJECT_ID" >> $GITHUB_OUTPUT
+          echo "project_url=$PROJECT_URL" >> $GITHUB_OUTPUT
+        fi
       continue-on-error: true
       
     # Snyk Code Test - Scans source code for vulnerabilities (SAST)
@@ -99,26 +109,34 @@ jobs:
           -H "Authorization: token ${SNYK_TOKEN}" \
           -H "Content-Type: application/json")
         
+        # Show total project count
+        TOTAL_PROJECTS=$(echo "$ALL_PROJECTS" | jq -r '.projects | length // 0')
+        echo "Found $TOTAL_PROJECTS total projects in org"
+        
+        # List first few projects for debugging
+        echo "Sample projects:"
+        echo "$ALL_PROJECTS" | jq -r '.projects[0:5]? | .[] | "  - \(.name) (type: \(.type), id: \(.id))"' || echo "  (could not parse projects)"
+        
         # Filter for projects matching our naming patterns
-        # Look for projects containing: goof-app, Snyk_Boards_Testing, or demo-goof-app
+        # Look for projects containing: goof-app, Snyk_Boards_Testing, demo-goof-app, or just use all projects
         PROJECTS=$(echo "$ALL_PROJECTS" | jq -r '.projects[]? | select(
-          (.name | contains("goof-app")) or 
+          (.name | ascii_downcase | contains("goof")) or 
           (.name | contains("Snyk_Boards_Testing")) or
-          (.name | contains("demo-goof-app")) or
-          (.name | contains("goof"))
+          (.name | contains("demo"))
         ) | {id: .id, name: .name, type: .type}')
         
         if [ -z "$PROJECTS" ] || [ "$PROJECTS" == "null" ]; then
-          echo "No matching projects found. Listing all projects for debugging:"
-          echo "$ALL_PROJECTS" | jq -r '.projects[]? | "  - \(.name) (type: \(.type))"' | head -10
-          echo "Using first project as fallback..."
-          # Use first project as fallback
-          PROJECTS=$(echo "$ALL_PROJECTS" | jq -r '.projects[0:3]? | .[] | {id: .id, name: .name, type: .type}')
+          echo "No matching projects found. Using ALL projects (first 5) as fallback..."
+          # Use first few projects as fallback
+          PROJECTS=$(echo "$ALL_PROJECTS" | jq -r '.projects[0:5]? | .[] | {id: .id, name: .name, type: .type}')
           if [ -z "$PROJECTS" ] || [ "$PROJECTS" == "null" ]; then
-            echo "No projects found in org"
-            exit 0
+            echo "ERROR: No projects found in org at all"
+            exit 1
           fi
         fi
+        
+        PROJECT_COUNT=$(echo "$PROJECTS" | jq -s 'length')
+        echo "Processing $PROJECT_COUNT project(s)"
         
         # Process each project
         echo "$PROJECTS" | jq -c '.' | while read -r project; do
