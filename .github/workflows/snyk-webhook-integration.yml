@@ -93,15 +93,31 @@ jobs:
         API_BASE="https://api.snyk.io/v1"
         
         # Get all projects in the org
-        echo "Fetching projects..."
-        PROJECTS=$(curl -s -X GET \
+        echo "Fetching all projects..."
+        ALL_PROJECTS=$(curl -s -X GET \
           "${API_BASE}/org/${ORG_ID}/projects" \
           -H "Authorization: token ${SNYK_TOKEN}" \
-          -H "Content-Type: application/json" | jq -r '.projects[]? | select(.name | contains("goof-app")) | {id: .id, name: .name, type: .type}')
+          -H "Content-Type: application/json")
+        
+        # Filter for projects matching our naming patterns
+        # Look for projects containing: goof-app, Snyk_Boards_Testing, or demo-goof-app
+        PROJECTS=$(echo "$ALL_PROJECTS" | jq -r '.projects[]? | select(
+          (.name | contains("goof-app")) or 
+          (.name | contains("Snyk_Boards_Testing")) or
+          (.name | contains("demo-goof-app")) or
+          (.name | contains("goof"))
+        ) | {id: .id, name: .name, type: .type}')
         
         if [ -z "$PROJECTS" ] || [ "$PROJECTS" == "null" ]; then
-          echo "No projects found matching 'goof-app'"
-          exit 0
+          echo "No matching projects found. Listing all projects for debugging:"
+          echo "$ALL_PROJECTS" | jq -r '.projects[]? | "  - \(.name) (type: \(.type))"' | head -10
+          echo "Using first project as fallback..."
+          # Use first project as fallback
+          PROJECTS=$(echo "$ALL_PROJECTS" | jq -r '.projects[0:3]? | .[] | {id: .id, name: .name, type: .type}')
+          if [ -z "$PROJECTS" ] || [ "$PROJECTS" == "null" ]; then
+            echo "No projects found in org"
+            exit 0
+          fi
         fi
         
         # Process each project
