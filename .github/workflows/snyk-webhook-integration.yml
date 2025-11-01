@@ -41,16 +41,14 @@ jobs:
       
     # Snyk Monitor - This triggers webhooks when NEW issues are found
     # Flow: snyk monitor → Snyk detects new issues → Webhook → Azure Function → Azure DevOps Boards
+    # Monitors dependencies for vulnerabilities. When NEW issues are detected,
+    # Snyk automatically sends webhook to Azure Function (snyk-webhook-68258),
+    # which creates work items in Azure DevOps Boards.
+    # This step will trigger webhooks if:
+    # - New vulnerabilities are introduced
+    # - Dependencies are updated with new vulnerabilities
+    # - First time scanning this project
     - name: Snyk Monitor (Open Source - Triggers Webhook)
-      description: |
-        Monitors dependencies for vulnerabilities. When NEW issues are detected,
-        Snyk automatically sends webhook to Azure Function (snyk-webhook-68258),
-        which creates work items in Azure DevOps Boards.
-        
-        This step will trigger webhooks if:
-        - New vulnerabilities are introduced
-        - Dependencies are updated with new vulnerabilities
-        - First time scanning this project
       run: |
         snyk monitor \
           --org=${{ secrets.SNYK_ORG_ID }} \
@@ -63,10 +61,9 @@ jobs:
     # Snyk Code Test - Scans source code for vulnerabilities (SAST)
     # Note: Snyk Code typically doesn't trigger project_snapshot webhooks,
     # but results are still reported to Snyk dashboard
+    # Scans source code for security vulnerabilities (Static Application Security Testing).
+    # Results are reported to Snyk dashboard and may trigger webhooks if configured.
     - name: Snyk Code Test (SAST)
-      description: |
-        Scans source code for security vulnerabilities (Static Application Security Testing).
-        Results are reported to Snyk dashboard and may trigger webhooks if configured.
       run: |
         snyk code test \
           --org=${{ secrets.SNYK_ORG_ID }} \
