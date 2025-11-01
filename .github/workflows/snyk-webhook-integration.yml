@@ -59,11 +59,10 @@ jobs:
       continue-on-error: true
       
     # Snyk Code Test - Scans source code for vulnerabilities (SAST)
-    # Note: Snyk Code typically doesn't trigger project_snapshot webhooks,
-    # but results are still reported to Snyk dashboard
-    # Scans source code for security vulnerabilities (Static Application Security Testing).
-    # Results are reported to Snyk dashboard and may trigger webhooks if configured.
-    - name: Snyk Code Test (SAST)
+    # Using --report publishes results to a Snyk Project, which can trigger
+    # project_snapshot webhooks when new issues are detected.
+    # See: https://docs.snyk.io/developer-tools/snyk-cli/scan-and-maintain-projects-using-the-cli/snyk-cli-for-snyk-code/scan-source-code-with-snyk-code-using-the-cli#publishing-snyk-code-cli-results
+    - name: Snyk Code Test (SAST - Triggers Webhook)
       run: |
         snyk code test \
           --org=${{ secrets.SNYK_ORG_ID }} \
