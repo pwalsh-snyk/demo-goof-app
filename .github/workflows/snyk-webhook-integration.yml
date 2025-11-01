@@ -1,0 +1,96 @@
+name: Snyk Webhook Integration
+
+# This workflow integrates Snyk scans with Azure DevOps Boards via webhooks
+# When NEW vulnerabilities are detected, Snyk automatically sends webhooks to
+# Azure Function, which creates work items in Azure DevOps Boards
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:  # Allows manual triggering
+
+env:
+  SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+  SNYK_ORG_ID: ${{ secrets.SNYK_ORG_ID }}
+
+jobs:
+  snyk-webhook-integration:
+    runs-on: ubuntu-latest
+    name: Snyk Scan with Webhook Integration
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Install Snyk CLI
+      run: npm install -g snyk
+      
+    - name: Authenticate with Snyk
+      run: snyk auth ${{ secrets.SNYK_TOKEN }}
+      
+    # Snyk Monitor - This triggers webhooks when NEW issues are found
+    # Flow: snyk monitor → Snyk detects new issues → Webhook → Azure Function → Azure DevOps Boards
+    - name: Snyk Monitor (Open Source - Triggers Webhook)
+      description: |
+        Monitors dependencies for vulnerabilities. When NEW issues are detected,
+        Snyk automatically sends webhook to Azure Function (snyk-webhook-68258),
+        which creates work items in Azure DevOps Boards.
+        
+        This step will trigger webhooks if:
+        - New vulnerabilities are introduced
+        - Dependencies are updated with new vulnerabilities
+        - First time scanning this project
+      run: |
+        snyk monitor \
+          --org=${{ secrets.SNYK_ORG_ID }} \
+          --project-name="goof-app-${{ github.event_name == 'pull_request' && 'pr' || 'main' }}" \
+          --target-name="github-actions" \
+          --target-reference="${{ github.ref_name }}" \
+          --severity-threshold=medium
+      continue-on-error: true
+      
+    # Snyk Code Test - Scans source code for vulnerabilities (SAST)
+    # Note: Snyk Code typically doesn't trigger project_snapshot webhooks,
+    # but results are still reported to Snyk dashboard
+    - name: Snyk Code Test (SAST)
+      description: |
+        Scans source code for security vulnerabilities (Static Application Security Testing).
+        Results are reported to Snyk dashboard and may trigger webhooks if configured.
+      run: |
+        snyk code test \
+          --org=${{ secrets.SNYK_ORG_ID }} \
+          --report \
+          --project-name="goof-app-code-${{ github.event_name == 'pull_request' && 'pr' || 'main' }}" \
+          --target-name="github-actions" \
+          --target-reference="${{ github.ref_name }}" \
+          --severity-threshold=medium
+      continue-on-error: true
+      
+    # Optional: Display summary
+    - name: Workflow Summary
+      if: always()
+      run: |
+        echo "## Snyk Scan Complete" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ Snyk monitoring completed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Webhook Integration" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "If NEW vulnerabilities were detected:" >> $GITHUB_STEP_SUMMARY
+        echo "1. Snyk sent webhook to Azure Function" >> $GITHUB_STEP_SUMMARY
+        echo "2. Work items created in Azure DevOps Boards" >> $GITHUB_STEP_SUMMARY
+        echo "3. Check: https://dev.azure.com/pr352312/Snyk_Boards_Testing/_boards/board/t/Snyk%20Boards%20Testing/Issues" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Note:** Webhooks only fire for NEW issues, not existing ones." >> $GITHUB_STEP_SUMMARY
+
