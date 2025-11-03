@@ -71,7 +71,7 @@ jobs:
 
     - name: Fetch All Issues and Create Work Items
       run: |
-        echo "Fetching ALL issues from Snyk projects..."
+        echo "Fetching issues from Snyk projects and creating work items..."
 
         sudo apt-get update -qq && sudo apt-get install -y jq curl
 
@@ -79,48 +79,82 @@ jobs:
         SNYK_TOKEN="${{ secrets.SNYK_TOKEN }}"
         API_BASE="https://api.snyk.io/v1"
 
-        echo "Fetching all projects..."
-        ALL_PROJECTS_RESPONSE=$(curl -s -X GET \
-          "${API_BASE}/org/${ORG_ID}/projects" \
-          -H "Authorization: bearer ${SNYK_TOKEN}" \
-          -H "Content-Type: application/json")
-
-        echo "Raw ALL_PROJECTS response:"
-        echo "$ALL_PROJECTS_RESPONSE" | jq '.' || echo "$ALL_PROJECTS_RESPONSE"
-
-        if ! echo "$ALL_PROJECTS_RESPONSE" | jq -e .projects > /dev/null 2>&1; then
-          echo "ERROR: Unable to parse .projects from Snyk API response"
-          echo "Response was: $ALL_PROJECTS_RESPONSE"
-          exit 1
+        # Build list of projects from monitor steps
+        PROJECTS_JSON="[]"
+        
+        # Add project from snyk monitor step if available
+        if [ -n "${{ steps.snyk-monitor.outputs.project_id }}" ]; then
+          PROJECT_ID="${{ steps.snyk-monitor.outputs.project_id }}"
+          PROJECT_URL="${{ steps.snyk-monitor.outputs.project_url }}"
+          PROJECT_NAME="goof-app-${{ github.event_name == 'pull_request' && 'pr' || 'main' }}"
+          PROJECT_TYPE="npm"
+          
+          echo "Adding project from monitor step: $PROJECT_NAME ($PROJECT_ID)"
+          PROJECTS_JSON=$(echo "$PROJECTS_JSON" | jq --arg id "$PROJECT_ID" --arg name "$PROJECT_NAME" --arg type "$PROJECT_TYPE" '. += [{"id": $id, "name": $name, "type": $type}]')
         fi
-
-        TOTAL_PROJECTS=$(echo "$ALL_PROJECTS_RESPONSE" | jq -r '.projects | length // 0')
-        echo "Found $TOTAL_PROJECTS total projects in org"
-
-        echo "Sample projects:"
-        echo "$ALL_PROJECTS_RESPONSE" | jq -r '.projects[0:5]? | .[] | "  - \(.name) (type: \(.type), id: \(.id))"' || echo "  (could not parse projects)"
-
-        # Get matching projects as JSON array
-        MATCHING_PROJECTS=$(echo "$ALL_PROJECTS_RESPONSE" | jq -c '[.projects[]? | select(
-          (.name | ascii_downcase | contains("goof")) or 
-          (.name | contains("Snyk_Boards_Testing")) or
-          (.name | contains("demo"))
-        )]')
-
-        if [ -z "$MATCHING_PROJECTS" ] || [ "$MATCHING_PROJECTS" == "[]" ] || [ "$MATCHING_PROJECTS" == "null" ]; then
-          echo "No matching projects found. Using ALL projects (first 5) as fallback..."
-          MATCHING_PROJECTS=$(echo "$ALL_PROJECTS_RESPONSE" | jq -c '[.projects[0:5]?[]]')
-          if [ -z "$MATCHING_PROJECTS" ] || [ "$MATCHING_PROJECTS" == "[]" ] || [ "$MATCHING_PROJECTS" == "null" ]; then
-            echo "ERROR: No projects found in org at all"
-            exit 1
+        
+        # Add project from snyk code test step if available
+        if [ -n "${{ steps.snyk-code.outputs.project_url }}" ]; then
+          PROJECT_URL="${{ steps.snyk-code.outputs.project_url }}"
+          # Extract project ID from URL
+          PROJECT_ID=$(echo "$PROJECT_URL" | grep -o 'project/[^/]*' | cut -d'/' -f2 || echo "")
+          if [ -n "$PROJECT_ID" ]; then
+            PROJECT_NAME="goof-app-code-${{ github.event_name == 'pull_request' && 'pr' || 'main' }}"
+            PROJECT_TYPE="sast"
+            
+            echo "Adding project from code test step: $PROJECT_NAME ($PROJECT_ID)"
+            PROJECTS_JSON=$(echo "$PROJECTS_JSON" | jq --arg id "$PROJECT_ID" --arg name "$PROJECT_NAME" --arg type "$PROJECT_TYPE" '. += [{"id": $id, "name": $name, "type": $type}]')
+          fi
+        fi
+        
+        # If no projects from monitor steps, try to fetch via API (with fallback)
+        if [ "$(echo "$PROJECTS_JSON" | jq 'length')" -eq 0 ]; then
+          echo "⚠️  No projects from monitor steps, attempting to fetch via API..."
+          
+          # Try API authentication
+          TEST_RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+            "${API_BASE}/org/${ORG_ID}/projects" \
+            -H "Authorization: token ${SNYK_TOKEN}" \
+            -H "Content-Type: application/json")
+          
+          HTTP_CODE=$(echo "$TEST_RESPONSE" | tail -n1)
+          TEST_BODY=$(echo "$TEST_RESPONSE" | sed '$d')
+          
+          if [ "$HTTP_CODE" -eq 401 ]; then
+            echo "⚠️  API authentication failed (401). This is expected if using a personal token without API access."
+            echo "   Personal tokens for free/team plans only work for CLI, not REST API."
+            echo "   To use REST API, you need a Service Account token or Enterprise plan."
+            echo ""
+            echo "   Skipping API-based project fetch. Using project IDs from monitor steps only."
+          elif [ "$HTTP_CODE" -eq 200 ]; then
+            echo "✅ API authentication successful"
+            if echo "$TEST_BODY" | jq -e .projects > /dev/null 2>&1; then
+              # Get matching projects
+              MATCHING_PROJECTS=$(echo "$TEST_BODY" | jq -c '[.projects[]? | select(
+                (.name | ascii_downcase | contains("goof")) or 
+                (.name | contains("Snyk_Boards_Testing")) or
+                (.name | contains("demo"))
+              )]')
+              
+              if [ -n "$MATCHING_PROJECTS" ] && [ "$MATCHING_PROJECTS" != "[]" ] && [ "$MATCHING_PROJECTS" != "null" ]; then
+                PROJECTS_JSON="$MATCHING_PROJECTS"
+              fi
+            fi
           fi
         fi
 
-        PROJECT_COUNT=$(echo "$MATCHING_PROJECTS" | jq 'length')
+        PROJECT_COUNT=$(echo "$PROJECTS_JSON" | jq 'length')
+        
+        if [ "$PROJECT_COUNT" -eq 0 ]; then
+          echo "❌ No projects found to process"
+          echo "   Make sure snyk monitor and/or snyk code test steps completed successfully"
+          exit 1
+        fi
+        
         echo "Processing $PROJECT_COUNT project(s)"
 
         # Process each project
-        echo "$MATCHING_PROJECTS" | jq -c '.[]' | while read -r project; do
+        echo "$PROJECTS_JSON" | jq -c '.[]' | while read -r project; do
           PROJECT_ID=$(echo "$project" | jq -r '.id')
           PROJECT_NAME=$(echo "$project" | jq -r '.name')
           PROJECT_TYPE=$(echo "$project" | jq -r '.type')
@@ -133,9 +167,9 @@ jobs:
           echo "=========================================="
 
           # Fetch issues for this project
-          ISSUES_RESPONSE=$(curl -s -X POST \
+          ISSUES_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             "${API_BASE}/org/${ORG_ID}/project/${PROJECT_ID}/issues" \
-            -H "Authorization: bearer ${SNYK_TOKEN}" \
+            -H "Authorization: token ${SNYK_TOKEN}" \
             -H "Content-Type: application/json" \
             -d '{
               "filters": {
@@ -143,6 +177,32 @@ jobs:
                 "types": ["vuln", "license", "code"]
               }
             }')
+          
+          ISSUES_HTTP_CODE=$(echo "$ISSUES_RESPONSE" | tail -n1)
+          ISSUES_BODY=$(echo "$ISSUES_RESPONSE" | sed '$d')
+          
+          if [ "$ISSUES_HTTP_CODE" -eq 401 ]; then
+            echo "⚠️  Got 401, trying 'bearer' format..."
+            ISSUES_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+              "${API_BASE}/org/${ORG_ID}/project/${PROJECT_ID}/issues" \
+              -H "Authorization: bearer ${SNYK_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "filters": {
+                  "severities": ["critical", "high", "medium"],
+                  "types": ["vuln", "license", "code"]
+                }
+              }')
+            ISSUES_HTTP_CODE=$(echo "$ISSUES_RESPONSE" | tail -n1)
+            ISSUES_BODY=$(echo "$ISSUES_RESPONSE" | sed '$d')
+          fi
+          
+          if [ "$ISSUES_HTTP_CODE" -ne 200 ]; then
+            echo "⚠️  HTTP $ISSUES_HTTP_CODE when fetching issues"
+            echo "Response: $ISSUES_BODY"
+          fi
+          
+          ISSUES_RESPONSE="$ISSUES_BODY"
 
           echo "Issues API Response:"
           echo "$ISSUES_RESPONSE" | jq '.' || echo "$ISSUES_RESPONSE"
