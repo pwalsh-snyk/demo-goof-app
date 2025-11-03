@@ -166,8 +166,13 @@ jobs:
           echo "  Type: $PROJECT_TYPE"
           echo "=========================================="
 
-          # Fetch issues for this project
-          ISSUES_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+          # Fetch issues - try API first, fallback to CLI
+          USE_CLI=false
+          ISSUES_RESPONSE=""
+          
+          # Try REST API first
+          echo "Attempting to fetch issues via REST API..."
+          API_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             "${API_BASE}/org/${ORG_ID}/project/${PROJECT_ID}/issues" \
             -H "Authorization: token ${SNYK_TOKEN}" \
             -H "Content-Type: application/json" \
@@ -178,33 +183,78 @@ jobs:
               }
             }')
           
-          ISSUES_HTTP_CODE=$(echo "$ISSUES_RESPONSE" | tail -n1)
-          ISSUES_BODY=$(echo "$ISSUES_RESPONSE" | sed '$d')
+          HTTP_CODE=$(echo "$API_RESPONSE" | tail -n1)
+          API_BODY=$(echo "$API_RESPONSE" | sed '$d')
           
-          if [ "$ISSUES_HTTP_CODE" -eq 401 ]; then
-            echo "⚠️  Got 401, trying 'bearer' format..."
-            ISSUES_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-              "${API_BASE}/org/${ORG_ID}/project/${PROJECT_ID}/issues" \
-              -H "Authorization: bearer ${SNYK_TOKEN}" \
-              -H "Content-Type: application/json" \
-              -d '{
-                "filters": {
-                  "severities": ["critical", "high", "medium"],
-                  "types": ["vuln", "license", "code"]
-                }
+          if [ "$HTTP_CODE" -eq 401 ]; then
+            echo "⚠️  API returned 401 (personal tokens may not have REST API access)"
+            echo "   Falling back to CLI method..."
+            USE_CLI=true
+          elif [ "$HTTP_CODE" -ne 200 ]; then
+            echo "⚠️  API returned HTTP $HTTP_CODE"
+            echo "   Falling back to CLI method..."
+            USE_CLI=true
+          else
+            ISSUES_RESPONSE="$API_BODY"
+            echo "✅ Successfully fetched issues via API"
+          fi
+          
+          # If API failed, use CLI to get issues
+          if [ "$USE_CLI" = true ]; then
+            echo "Fetching issues via Snyk CLI..."
+            
+            if [ "$PROJECT_TYPE" = "sast" ] || [ "$PROJECT_TYPE" = "code" ]; then
+              # For code/SAST issues, use snyk code test
+              CLI_OUTPUT=$(snyk code test --json --org="${ORG_ID}" --severity-threshold=medium 2>&1 || echo "")
+            else
+              # For dependency issues, use snyk test
+              CLI_OUTPUT=$(snyk test --json --org="${ORG_ID}" --severity-threshold=medium 2>&1 || echo "")
+            fi
+            
+            # Convert CLI JSON output to webhook format
+            if echo "$CLI_OUTPUT" | jq -e '.vulnerabilities' > /dev/null 2>&1; then
+              # Parse snyk test output (dependency vulnerabilities)
+              ISSUES_RESPONSE=$(echo "$CLI_OUTPUT" | jq -c '{
+                issues: [
+                  .vulnerabilities[]? | {
+                    id: (.id // .vulnID // "unknown"),
+                    title: (.title // .name // "Security Issue"),
+                    severity: (.severity // "medium" | ascii_downcase),
+                    description: (.description // .summary // "Security vulnerability detected"),
+                    type: "vuln",
+                    package: (.packageName // .name // "unknown"),
+                    packageManager: (.packageManager // "npm"),
+                    url: (.url // "https://app.snyk.io"),
+                    identifiers: (.identifiers // {})
+                  }
+                ]
               }')
-            ISSUES_HTTP_CODE=$(echo "$ISSUES_RESPONSE" | tail -n1)
-            ISSUES_BODY=$(echo "$ISSUES_RESPONSE" | sed '$d')
+            elif echo "$CLI_OUTPUT" | jq -e '.runs[0].results[0].ruleId' > /dev/null 2>&1; then
+              # Parse snyk code test SARIF output
+              ISSUES_RESPONSE=$(echo "$CLI_OUTPUT" | jq -c '{
+                issues: [
+                  .runs[0].results[]? | {
+                    id: (.ruleId // "unknown"),
+                    title: (.message.text // .ruleId // "Security Issue"),
+                    severity: (.level // "medium" | ascii_downcase | gsub("error"; "high") | gsub("warning"; "medium") | gsub("note"; "low")),
+                    description: (.message.text // "Code security issue detected"),
+                    type: "code",
+                    package: "N/A",
+                    packageManager: "N/A",
+                    url: "https://app.snyk.io",
+                    identifiers: {}
+                  }
+                ]
+              }')
+            else
+              echo "⚠️  Could not parse CLI output"
+              echo "CLI output: $CLI_OUTPUT"
+              continue
+            fi
+            echo "✅ Successfully fetched issues via CLI"
           fi
-          
-          if [ "$ISSUES_HTTP_CODE" -ne 200 ]; then
-            echo "⚠️  HTTP $ISSUES_HTTP_CODE when fetching issues"
-            echo "Response: $ISSUES_BODY"
-          fi
-          
-          ISSUES_RESPONSE="$ISSUES_BODY"
 
-          echo "Issues API Response:"
+          echo "Issues Response:"
           echo "$ISSUES_RESPONSE" | jq '.' || echo "$ISSUES_RESPONSE"
 
           # Check if response has issues
@@ -224,22 +274,22 @@ jobs:
 
           # Format issues to match Snyk webhook format
           FORMATTED_ISSUES=$(echo "$ISSUES_RESPONSE" | jq -c '[.issues[]? | {
-            id: .id,
+            id: (.id // "unknown"),
             issueData: {
-              id: .id,
-              title: (.title // .issueData.title // .attributes.title // "Security Issue"),
-              severity: (.severity // .issueData.severity // .attributes.severity // "medium" | ascii_downcase),
-              description: (.description // .issueData.description // .attributes.description // "Security vulnerability detected"),
-              type: (.type // .issueData.type // .attributes.type // "vuln"),
-              packageName: (.package // .pkgName // .packageName // .attributes.packageName // .coordinates.name // "unknown"),
-              packageManager: (.packageManager // .attributes.packageManager // "npm"),
-              url: (.url // .issueData.url // .attributes.url // "https://app.snyk.io"),
-              identifiers: (.identifiers // .issueData.identifiers // .attributes.identifiers // {})
+              id: (.id // "unknown"),
+              title: (.title // "Security Issue"),
+              severity: (.severity // "medium" | ascii_downcase),
+              description: (.description // "Security vulnerability detected"),
+              type: (.type // "vuln"),
+              packageName: (.package // .packageName // "unknown"),
+              packageManager: (.packageManager // "npm"),
+              url: (.url // "https://app.snyk.io"),
+              identifiers: (.identifiers // {})
             },
-            introducedDate: (.introducedDate // (now | todateiso8601)),
+            introducedDate: (now | todateiso8601),
             priority: {
-              score: (.priority.score // 500),
-              factors: (.priority.factors // [])
+              score: 500,
+              factors: []
             }
           }]')
 
