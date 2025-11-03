@@ -80,51 +80,60 @@ jobs:
         API_BASE="https://api.snyk.io/v1"
 
         echo "Fetching all projects..."
-        ALL_PROJECTS=$(curl -s -X GET \
+        ALL_PROJECTS_RESPONSE=$(curl -s -X GET \
           "${API_BASE}/org/${ORG_ID}/projects" \
           -H "Authorization: bearer ${SNYK_TOKEN}" \
           -H "Content-Type: application/json")
 
         echo "Raw ALL_PROJECTS response:"
-        echo "$ALL_PROJECTS"
+        echo "$ALL_PROJECTS_RESPONSE" | jq '.' || echo "$ALL_PROJECTS_RESPONSE"
 
-        if ! echo "$ALL_PROJECTS" | jq -e .projects > /dev/null; then
+        if ! echo "$ALL_PROJECTS_RESPONSE" | jq -e .projects > /dev/null 2>&1; then
           echo "ERROR: Unable to parse .projects from Snyk API response"
+          echo "Response was: $ALL_PROJECTS_RESPONSE"
           exit 1
         fi
 
-        TOTAL_PROJECTS=$(echo "$ALL_PROJECTS" | jq -r '.projects | length // 0')
+        TOTAL_PROJECTS=$(echo "$ALL_PROJECTS_RESPONSE" | jq -r '.projects | length // 0')
         echo "Found $TOTAL_PROJECTS total projects in org"
 
         echo "Sample projects:"
-        echo "$ALL_PROJECTS" | jq -r '.projects[0:5]? | .[] | "  - \(.name) (type: \(.type), id: \(.id))"' || echo "  (could not parse projects)"
+        echo "$ALL_PROJECTS_RESPONSE" | jq -r '.projects[0:5]? | .[] | "  - \(.name) (type: \(.type), id: \(.id))"' || echo "  (could not parse projects)"
 
-        PROJECTS=$(echo "$ALL_PROJECTS" | jq -r '.projects[]? | select(
+        # Get matching projects as JSON array
+        MATCHING_PROJECTS=$(echo "$ALL_PROJECTS_RESPONSE" | jq -c '[.projects[]? | select(
           (.name | ascii_downcase | contains("goof")) or 
           (.name | contains("Snyk_Boards_Testing")) or
           (.name | contains("demo"))
-        ) | {id: .id, name: .name, type: .type}')
+        )]')
 
-        if [ -z "$PROJECTS" ] || [ "$PROJECTS" == "null" ]; then
+        if [ -z "$MATCHING_PROJECTS" ] || [ "$MATCHING_PROJECTS" == "[]" ] || [ "$MATCHING_PROJECTS" == "null" ]; then
           echo "No matching projects found. Using ALL projects (first 5) as fallback..."
-          PROJECTS=$(echo "$ALL_PROJECTS" | jq -r '.projects[0:5]? | .[] | {id: .id, name: .name, type: .type}')
-          if [ -z "$PROJECTS" ] || [ "$PROJECTS" == "null" ]; then
+          MATCHING_PROJECTS=$(echo "$ALL_PROJECTS_RESPONSE" | jq -c '[.projects[0:5]?[]]')
+          if [ -z "$MATCHING_PROJECTS" ] || [ "$MATCHING_PROJECTS" == "[]" ] || [ "$MATCHING_PROJECTS" == "null" ]; then
             echo "ERROR: No projects found in org at all"
             exit 1
           fi
         fi
 
-        PROJECT_COUNT=$(echo "$PROJECTS" | jq -s 'length')
+        PROJECT_COUNT=$(echo "$MATCHING_PROJECTS" | jq 'length')
         echo "Processing $PROJECT_COUNT project(s)"
 
-        echo "$PROJECTS" | jq -c '.' | while read -r project; do
+        # Process each project
+        echo "$MATCHING_PROJECTS" | jq -c '.[]' | while read -r project; do
           PROJECT_ID=$(echo "$project" | jq -r '.id')
           PROJECT_NAME=$(echo "$project" | jq -r '.name')
           PROJECT_TYPE=$(echo "$project" | jq -r '.type')
 
-          echo "Processing project: $PROJECT_NAME (ID: $PROJECT_ID, Type: $PROJECT_TYPE)"
+          echo ""
+          echo "=========================================="
+          echo "Processing project: $PROJECT_NAME"
+          echo "  ID: $PROJECT_ID"
+          echo "  Type: $PROJECT_TYPE"
+          echo "=========================================="
 
-          ISSUES=$(curl -s -X POST \
+          # Fetch issues for this project
+          ISSUES_RESPONSE=$(curl -s -X POST \
             "${API_BASE}/org/${ORG_ID}/project/${PROJECT_ID}/issues" \
             -H "Authorization: bearer ${SNYK_TOKEN}" \
             -H "Content-Type: application/json" \
@@ -133,39 +142,62 @@ jobs:
                 "severities": ["critical", "high", "medium"],
                 "types": ["vuln", "license", "code"]
               }
-            }' | jq -r '.issues[]? // empty')
+            }')
 
-          if [ -z "$ISSUES" ] || [ "$ISSUES" == "null" ]; then
+          echo "Issues API Response:"
+          echo "$ISSUES_RESPONSE" | jq '.' || echo "$ISSUES_RESPONSE"
+
+          # Check if response has issues
+          if ! echo "$ISSUES_RESPONSE" | jq -e '.issues' > /dev/null 2>&1; then
+            echo "⚠️  No issues array in response for project $PROJECT_NAME"
+            continue
+          fi
+
+          ISSUE_COUNT=$(echo "$ISSUES_RESPONSE" | jq -r '.issues | length // 0')
+          
+          if [ "$ISSUE_COUNT" -eq 0 ]; then
             echo "No issues found for project $PROJECT_NAME"
             continue
           fi
 
-          ISSUE_COUNT=$(echo "$ISSUES" | jq -s 'length')
           echo "Found $ISSUE_COUNT issues for $PROJECT_NAME"
 
-          FORMATTED_ISSUES=$(echo "$ISSUES" | jq -s 'map({
+          # Format issues to match Snyk webhook format
+          FORMATTED_ISSUES=$(echo "$ISSUES_RESPONSE" | jq -c '[.issues[]? | {
             id: .id,
             issueData: {
               id: .id,
-              title: (.title // .issueData.title // "Security Issue"),
-              severity: (.severity // .issueData.severity // "medium" | ascii_downcase),
-              description: (.description // .issueData.description // "Security vulnerability detected"),
-              type: (.type // .issueData.type // "vuln"),
-              packageName: (.package // .pkgName // .packageName // "unknown"),
-              packageManager: (.packageManager // "npm"),
-              url: (.url // .issueData.url // "https://app.snyk.io"),
-              identifiers: (.identifiers // .issueData.identifiers // {})
+              title: (.title // .issueData.title // .attributes.title // "Security Issue"),
+              severity: (.severity // .issueData.severity // .attributes.severity // "medium" | ascii_downcase),
+              description: (.description // .issueData.description // .attributes.description // "Security vulnerability detected"),
+              type: (.type // .issueData.type // .attributes.type // "vuln"),
+              packageName: (.package // .pkgName // .packageName // .attributes.packageName // .coordinates.name // "unknown"),
+              packageManager: (.packageManager // .attributes.packageManager // "npm"),
+              url: (.url // .issueData.url // .attributes.url // "https://app.snyk.io"),
+              identifiers: (.identifiers // .issueData.identifiers // .attributes.identifiers // {})
             },
-            introducedDate: (now | todateiso8601),
+            introducedDate: (.introducedDate // (now | todateiso8601)),
             priority: {
-              score: 500,
-              factors: []
+              score: (.priority.score // 500),
+              factors: (.priority.factors // [])
             }
-          })')
+          }]')
 
+          # Validate formatted issues
+          if [ -z "$FORMATTED_ISSUES" ] || [ "$FORMATTED_ISSUES" == "null" ] || [ "$FORMATTED_ISSUES" == "[]" ]; then
+            echo "⚠️  Failed to format issues for project $PROJECT_NAME"
+            continue
+          fi
+
+          # Get org slug from org API if possible, otherwise use default
+          ORG_SLUG="integration_testing"
+          ORG_NAME="Integration_Testing"
+          
+          # Build the webhook payload matching Snyk's format
           PAYLOAD=$(jq -n \
             --arg org_id "$ORG_ID" \
-            --arg org_name "Integration_Testing" \
+            --arg org_name "$ORG_NAME" \
+            --arg org_slug "$ORG_SLUG" \
             --arg project_id "$PROJECT_ID" \
             --arg project_name "$PROJECT_NAME" \
             --arg project_type "$PROJECT_TYPE" \
@@ -174,14 +206,14 @@ jobs:
               project: {
                 id: $project_id,
                 name: $project_name,
-                browseUrl: "https://app.snyk.io/org/integration_testing/project/\($project_id)",
+                browseUrl: "https://app.snyk.io/org/\($org_slug)/project/\($project_id)",
                 type: $project_type,
                 source: "cli"
               },
               org: {
                 id: $org_id,
                 name: $org_name,
-                slug: "integration_testing",
+                slug: $org_slug,
                 group: null
               },
               newIssues: $issues,
@@ -189,10 +221,26 @@ jobs:
               timestamp: (now | todateiso8601)
             }')
 
+          # Validate payload is valid JSON
+          if ! echo "$PAYLOAD" | jq '.' > /dev/null 2>&1; then
+            echo "❌ ERROR: Invalid JSON payload generated"
+            echo "Payload: $PAYLOAD"
+            continue
+          fi
+
           AZURE_FUNCTION_CODE="${{ secrets.AZURE_FUNCTION_CODE }}"
+          if [ -z "$AZURE_FUNCTION_CODE" ]; then
+            echo "❌ ERROR: AZURE_FUNCTION_CODE secret is not set"
+            continue
+          fi
+
           AZURE_FUNCTION_URL="https://snyk-webhook-68258.azurewebsites.net/api/snykwebhookfunction?code=${AZURE_FUNCTION_CODE}"
 
           echo "Sending $ISSUE_COUNT issues from $PROJECT_NAME to Azure Function..."
+          echo "Payload preview (first 500 chars):"
+          echo "$PAYLOAD" | head -c 500
+          echo ""
+
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             "$AZURE_FUNCTION_URL" \
             -H "Content-Type: application/json" \
@@ -203,14 +251,18 @@ jobs:
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | sed '$d')
 
-          if [ "$HTTP_CODE" -eq 200 ]; then
-            echo "✅ Successfully sent $ISSUE_COUNT issues from $PROJECT_NAME"
-            echo "Response: $BODY"
+          echo "HTTP Status: $HTTP_CODE"
+          echo "Response Body: $BODY"
+
+          if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 201 ] || [ "$HTTP_CODE" -eq 202 ]; then
+            echo "✅ Successfully sent $ISSUE_COUNT issues from $PROJECT_NAME to Azure Function"
           else
-            echo "⚠️ HTTP $HTTP_CODE response: $BODY"
+            echo "❌ HTTP $HTTP_CODE response from Azure Function"
+            echo "Response: $BODY"
           fi
         done
 
+        echo ""
         echo "✅ Finished processing all projects"
       continue-on-error: true
 
