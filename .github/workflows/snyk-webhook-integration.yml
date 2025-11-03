@@ -272,8 +272,9 @@ jobs:
 
           echo "Found $ISSUE_COUNT issues for $PROJECT_NAME"
 
-          # Format issues to match Snyk webhook format
-          FORMATTED_ISSUES=$(echo "$ISSUES_RESPONSE" | jq -c '[.issues[]? | {
+          # Format issues to match Snyk webhook format - use temp file to avoid "Argument list too long" error
+          TEMP_ISSUES_FILE=$(mktemp)
+          echo "$ISSUES_RESPONSE" | jq -c '[.issues[]? | {
             id: (.id // "unknown"),
             issueData: {
               id: (.id // "unknown"),
@@ -291,11 +292,13 @@ jobs:
               score: 500,
               factors: []
             }
-          }]')
+          }]' > "$TEMP_ISSUES_FILE"
 
           # Validate formatted issues
-          if [ -z "$FORMATTED_ISSUES" ] || [ "$FORMATTED_ISSUES" == "null" ] || [ "$FORMATTED_ISSUES" == "[]" ]; then
-            echo "⚠️  Failed to format issues for project $PROJECT_NAME"
+          ISSUE_COUNT_IN_FILE=$(jq 'length' "$TEMP_ISSUES_FILE")
+          if [ "$ISSUE_COUNT_IN_FILE" -eq 0 ]; then
+            echo "⚠️  Failed to format issues for project $PROJECT_NAME (0 issues in file)"
+            rm -f "$TEMP_ISSUES_FILE"
             continue
           fi
 
@@ -303,15 +306,16 @@ jobs:
           ORG_SLUG="integration_testing"
           ORG_NAME="Integration_Testing"
           
-          # Build the webhook payload matching Snyk's format
-          PAYLOAD=$(jq -n \
+          # Build the webhook payload matching Snyk's format - use temp file to avoid argument list issues
+          TEMP_PAYLOAD_FILE=$(mktemp)
+          jq -n \
             --arg org_id "$ORG_ID" \
             --arg org_name "$ORG_NAME" \
             --arg org_slug "$ORG_SLUG" \
             --arg project_id "$PROJECT_ID" \
             --arg project_name "$PROJECT_NAME" \
             --arg project_type "$PROJECT_TYPE" \
-            --argjson issues "$FORMATTED_ISSUES" \
+            --slurpfile issues "$TEMP_ISSUES_FILE" \
             '{
               project: {
                 id: $project_id,
@@ -326,17 +330,24 @@ jobs:
                 slug: $org_slug,
                 group: null
               },
-              newIssues: $issues,
+              newIssues: $issues[0],
               removedIssues: [],
               timestamp: (now | todateiso8601)
-            }')
+            }' > "$TEMP_PAYLOAD_FILE"
+          
+          PAYLOAD=$(cat "$TEMP_PAYLOAD_FILE")
 
           # Validate payload is valid JSON
-          if ! echo "$PAYLOAD" | jq '.' > /dev/null 2>&1; then
+          if ! jq '.' "$TEMP_PAYLOAD_FILE" > /dev/null 2>&1; then
             echo "❌ ERROR: Invalid JSON payload generated"
-            echo "Payload: $PAYLOAD"
+            echo "Payload preview:"
+            head -c 500 "$TEMP_PAYLOAD_FILE"
+            rm -f "$TEMP_ISSUES_FILE" "$TEMP_PAYLOAD_FILE"
             continue
           fi
+          
+          # Clean up temp files after validation
+          rm -f "$TEMP_ISSUES_FILE"
 
           AZURE_FUNCTION_CODE="${{ secrets.AZURE_FUNCTION_CODE }}"
           if [ -z "$AZURE_FUNCTION_CODE" ]; then
@@ -348,7 +359,7 @@ jobs:
 
           echo "Sending $ISSUE_COUNT issues from $PROJECT_NAME to Azure Function..."
           echo "Payload preview (first 500 chars):"
-          echo "$PAYLOAD" | head -c 500
+          head -c 500 "$TEMP_PAYLOAD_FILE"
           echo ""
 
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
@@ -356,7 +367,10 @@ jobs:
             -H "Content-Type: application/json" \
             -H "X-Snyk-Event: project_snapshot" \
             -H "X-Snyk-Timestamp: $(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
-            -d "$PAYLOAD")
+            --data-binary "@$TEMP_PAYLOAD_FILE")
+          
+          # Clean up payload file after sending
+          rm -f "$TEMP_PAYLOAD_FILE"
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | sed '$d')
