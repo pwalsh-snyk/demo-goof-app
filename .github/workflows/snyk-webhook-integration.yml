@@ -402,3 +402,4 @@ jobs:
         echo "All issues (new and existing) have been sent to Azure Function" >> $GITHUB_STEP_SUMMARY
         echo "1. Work items created in Azure DevOps Boards" >> $GITHUB_STEP_SUMMARY
         echo "2. Check: https://dev.azure.com/pr352312/Snyk_Boards_Testing/_boards/board/t/Snyk%20Boards%20Testing/Issues" >> $GITHUB_STEP_SUMMARY
+# Trigger test run
