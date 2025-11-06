@@ -33,6 +33,7 @@
     "jquery": "^2.2.4",
     "lodash": "4.17.4",
     "marked": "0.3.5",
+    "marsdb": "^0.6.11",
     "method-override": "latest",
     "moment": "2.15.1",
     "mongodb": "^3.5.9",
