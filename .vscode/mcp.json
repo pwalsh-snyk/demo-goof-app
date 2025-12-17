@@ -2,7 +2,7 @@
   "servers": {
     "Snyk": {
       "type": "stdio",
-      "command": "/usr/local/bin/snyk",
+      "command": "/opt/homebrew/bin/snyk",
       "args": ["mcp", "-t", "stdio"],
       "env": {}
     }
