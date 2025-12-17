@@ -4,7 +4,7 @@
       "type": "stdio",
       "command": "/opt/homebrew/bin/snyk",
       "args": ["mcp", "-t", "stdio"],
-      "env": {}
+      "env": { "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" }
     }
   }
 }
