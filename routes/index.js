@@ -251,7 +251,9 @@ exports.edit = function (req, res, next) {
 
 exports.update = function (req, res, next) {
   Todo.findById(req.params.id, function (err, todo) {
-    todo.content = req.body.content;
+    // SQL Injection Vulnerability
+    const content = req.body.content;
+    todo.content = content;
     todo.updated_at = Date.now();
     todo.save(function (err, todo, count) {
       if (err) return next(err);
@@ -329,6 +331,7 @@ exports.import = function (req, res, next) {
 
 exports.about_new = function (req, res, next) {
   console.log(JSON.stringify(req.query));
+  // Cross-Site Scripting Vulnerability
   return res.render("about_new.dust", {
     title: "Goof TODO",
     subhead: "Vulnerabilities at their best",
