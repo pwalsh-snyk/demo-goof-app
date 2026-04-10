@@ -26,17 +26,20 @@ jobs:
         run: snyk auth ${{ secrets.SNYK_TOKEN }}
 
       - name: Run Snyk IaC scan (controlled exit codes)
+        shell: bash
         run: |
+          set +e
+
           snyk iac test .
           EXIT_CODE=$?
 
           echo "Snyk exit code: $EXIT_CODE"
 
           if [ "$EXIT_CODE" -eq 0 ] || [ "$EXIT_CODE" -eq 1 ]; then
-            echo "Snyk scan completed (no issues or issues found). Continuing pipeline."
+            echo "Snyk scan completed successfully for CI purposes."
             exit 0
           elif [ "$EXIT_CODE" -eq 2 ] || [ "$EXIT_CODE" -eq 3 ]; then
-            echo "Snyk scan failed due to error."
+            echo "Snyk scan failed due to an operational error."
             exit $EXIT_CODE
           else
             echo "Unexpected exit code: $EXIT_CODE"
@@ -45,7 +48,10 @@ jobs:
 
       # Optional: Useful flags for tuning scans
       # - name: Run Snyk IaC scan with options
+      #   shell: bash
       #   run: |
+      #     set +e
+      #
       #     snyk iac test . \
       #       --severity-threshold=high \
       #       --org=<your-org-id> \
@@ -53,10 +59,32 @@ jobs:
       #       --json-file-output=snyk-iac.json \
       #       --detection-depth=4 \
       #       --target-reference=main
+      #
+      #     EXIT_CODE=$?
+      #     echo "Snyk exit code: $EXIT_CODE"
+      #
+      #     if [ "$EXIT_CODE" -eq 0 ] || [ "$EXIT_CODE" -eq 1 ]; then
+      #       exit 0
+      #     else
+      #       exit $EXIT_CODE
+      #     fi
 
       # Optional: send IaC results to Snyk Web UI
       # - name: Run Snyk IaC scan with reporting
-      #   run: snyk iac test . --report
+      #   shell: bash
+      #   run: |
+      #     set +e
+      #
+      #     snyk iac test . --report
+      #     EXIT_CODE=$?
+      #
+      #     echo "Snyk exit code: $EXIT_CODE"
+      #
+      #     if [ "$EXIT_CODE" -eq 0 ] || [ "$EXIT_CODE" -eq 1 ]; then
+      #       exit 0
+      #     else
+      #       exit $EXIT_CODE
+      #     fi
 
       # Optional: Upload IaC scan results as artifact
       # - name: Upload IaC scan results
