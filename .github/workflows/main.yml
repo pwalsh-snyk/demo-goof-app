@@ -1,0 +1,52 @@
+name: Snyk IaC Scan
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  snyk-iac:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Authenticate Snyk CLI
+        run: snyk auth ${{ secrets.SNYK_TOKEN }}
+
+      - name: Run Snyk IaC scan
+        run: snyk iac test .
+
+      # Optional: Useful flags for tuning scans
+      # - name: Run Snyk IaC scan with options
+      #   run: |
+      #     snyk iac test . \
+      #       --severity-threshold=high \        # only fail on high/critical issues
+      #       --org=<your-org-id> \              # target specific Snyk org
+      #       --json \                          # output results in JSON format
+      #       --json-file-output=snyk-iac.json \# save results to file
+      #       --detection-depth=4 \             # control scan depth for IaC files
+      #       --target-reference=main           # tag results (useful with reporting)
+
+      # Optional: send IaC results to Snyk Web UI
+      # - name: Run Snyk IaC scan with reporting
+      #   run: snyk iac test . --report
+
+      # Optional: Upload IaC scan results as artifact
+      # - name: Upload IaC scan results
+      #   uses: actions/upload-artifact@v4
+      #   if: always()
+      #   with:
+      #     name: snyk-iac-results
+      #     path: snyk-iac.json
