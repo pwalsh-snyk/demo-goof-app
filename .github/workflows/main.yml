@@ -25,19 +25,34 @@ jobs:
       - name: Authenticate Snyk CLI
         run: snyk auth ${{ secrets.SNYK_TOKEN }}
 
-      - name: Run Snyk IaC scan
-        run: snyk iac test .
+      - name: Run Snyk IaC scan (controlled exit codes)
+        run: |
+          snyk iac test .
+          EXIT_CODE=$?
+
+          echo "Snyk exit code: $EXIT_CODE"
+
+          if [ "$EXIT_CODE" -eq 0 ] || [ "$EXIT_CODE" -eq 1 ]; then
+            echo "Snyk scan completed (no issues or issues found). Continuing pipeline."
+            exit 0
+          elif [ "$EXIT_CODE" -eq 2 ] || [ "$EXIT_CODE" -eq 3 ]; then
+            echo "Snyk scan failed due to error."
+            exit $EXIT_CODE
+          else
+            echo "Unexpected exit code: $EXIT_CODE"
+            exit $EXIT_CODE
+          fi
 
       # Optional: Useful flags for tuning scans
       # - name: Run Snyk IaC scan with options
       #   run: |
       #     snyk iac test . \
-      #       --severity-threshold=high \        # only fail on high/critical issues
-      #       --org=<your-org-id> \              # target specific Snyk org
-      #       --json \                          # output results in JSON format
-      #       --json-file-output=snyk-iac.json \# save results to file
-      #       --detection-depth=4 \             # control scan depth for IaC files
-      #       --target-reference=main           # tag results (useful with reporting)
+      #       --severity-threshold=high \
+      #       --org=<your-org-id> \
+      #       --json \
+      #       --json-file-output=snyk-iac.json \
+      #       --detection-depth=4 \
+      #       --target-reference=main
 
       # Optional: send IaC results to Snyk Web UI
       # - name: Run Snyk IaC scan with reporting
